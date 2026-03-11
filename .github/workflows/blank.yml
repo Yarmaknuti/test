@@ -1,6 +1,7 @@
 name: Release Elastic API
 
-
+permissions:
+  contents: write
 on:
   push:
     branches:
