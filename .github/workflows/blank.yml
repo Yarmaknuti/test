@@ -1,0 +1,105 @@
+name: Release Elastic API
+
+
+on:
+  push:
+    branches:
+      - add-build-push
+  workflow_dispatch:
+    inputs:
+      version_bump:
+        description: Version bump
+        required: true
+        type: choice
+        options:
+          - bugfix
+          - minor
+          - major
+
+env:
+  IMAGE_NAME: elastic-api-service
+
+jobs:
+
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Fetch tags
+        run: git fetch --tags
+      - name: Calculate version
+        id: version
+        run: |
+          if [ -z "${{ github.event.inputs.version_bump }}" ]; then
+            echo "version_bump not found"
+            exit 1
+          else
+            echo "version_bump: ${{ github.event.inputs.version_bump }}"
+          fi
+          
+          LAST_TAG=$(git tag --sort=-v:refname | head -n 1)
+
+          if [ -z "$LAST_TAG" ]; then
+            VERSION="0.1.0"
+          else
+
+            VERSION=${LAST_TAG#v}
+
+            IFS='.' read MAJOR MINOR PATCH <<< "$VERSION"
+
+            case "${{ github.event.inputs.version_bump }}" in
+              bugfix)
+                PATCH=$((PATCH+1))
+                ;;
+              minor)
+                MINOR=$((MINOR+1))
+                PATCH=0
+                ;;
+              major)
+                MAJOR=$((MAJOR+1))
+                MINOR=0
+                PATCH=0
+                ;;
+            esac
+
+            VERSION="$MAJOR.$MINOR.$PATCH"
+
+          fi
+
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+
+      - name: Create Git Tag
+        run: |
+          git config user.email "github-actions@github.com"
+          git config user.name "github-actions"
+
+          git tag v${VERSION}
+          git push origin v${VERSION}
+
+      - name: Auth to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Configure Docker
+        run: |
+          gcloud auth configure-docker \
+          ${{ secrets.GCP_REGION }}-docker.pkg.dev
+
+      - name: Build Docker image
+        run: |
+          docker build \
+          -t ${{ secrets.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ secrets.GCP_REPO }}/${{ env.IMAGE_NAME }}:${VERSION} \
+          -t ${{ secrets.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ secrets.GCP_REPO }}/${{ env.IMAGE_NAME }}:latest \
+          .
+
+      - name: Push Docker image
+        run: |
+          docker push ${{ secrets.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ secrets.GCP_REPO }}/${{ env.IMAGE_NAME }}:${VERSION}
+          docker push ${{ secrets.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ secrets.GCP_REPO }}/${{ env.IMAGE_NAME }}:latest
